@@ -1,0 +1,160 @@
+{% extends "base.html" %}
+
+{% block title %}Верификация почерка - Keystroke Dynamics Auth{% endblock %}
+
+{% block body %}
+<div class="container">
+    <div class="card" style="max-width: 600px; margin: 0 auto;">
+        <div class="header">
+            <h1>🔍 Верификация клавиатурного почерка</h1>
+            <p>Подтвердите вашу личность</p>
+        </div>
+        <div class="content">
+            <div id="message" class="message"></div>
+
+            <div style="background: #fff3cd; padding: 15px; border-radius: 5px; margin: 20px 0; text-align: center;">
+                <p style="font-size: 12px; color: #856404;"><strong>⚠️ Важно:</strong> Печатайте в обычном темпе и стиле. Система анализирует вашу динамику печати.</p>
+            </div>
+
+            <div style="background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 20px 0; text-align: center;">
+                <p style="font-size: 14px; font-weight: bold; color: #1976d2;">The quick brown fox jumps over the lazy dog</p>
+            </div>
+
+            <div class="form-group">
+                <label for="verifyInputArea">Введите текст для верификации:</label>
+                <textarea id="verifyInputArea" placeholder="Печатайте текст здесь..."></textarea>
+            </div>
+
+            <div class="stats" style="display: none;" id="verifyStats">
+                <div class="stat-item">
+                    <div class="stat-value" id="verifyTypingSpeed">0</div>
+                    <div class="stat-label">Сим/сек</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="verifyDwellTime">0</div>
+                    <div class="stat-label">Мс (нажатие)</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="verifyFlightTime">0</div>
+                    <div class="stat-label">Мс (между)</div>
+                </div>
+                <div class="stat-item">
+                    <div class="stat-value" id="matchScore">--</div>
+                    <div class="stat-label">Совпадение</div>
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 10px;">
+                <button type="button" class="btn btn-primary" id="verifyBtn" style="flex: 1;">🔐 Верифицировать</button>
+                <button type="button" class="btn btn-secondary" id="verifyClearBtn" style="flex: 1;">↻ Очистить</button>
+            </div>
+
+            <div class="link">
+                Вернуться к <a href="/login">входу</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const verifyInputArea = document.getElementById('verifyInputArea');
+const verifyBtn = document.getElementById('verifyBtn');
+const verifyClearBtn = document.getElementById('verifyClearBtn');
+const verifyStats = document.getElementById('verifyStats');
+
+let verifyKeystrokeEvents = [];
+let verifyStartTime = 0;
+
+verifyBtn.addEventListener('click', async () => {
+    if (verifyKeystrokeEvents.length < 20) {
+        window.showMessage('Напечатайте больше символов для верификации', 'error');
+        return;
+    }
+
+    verifyBtn.disabled = true;
+    verifyBtn.textContent = 'Верификация...';
+
+    try {
+        const response = await fetch('/verify', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ keystroke_events: verifyKeystrokeEvents })
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.authenticated) {
+            window.showMessage('✓ Верификация успешна! Добро пожаловать!', 'success');
+            setTimeout(() => {
+                window.location.href = '/dashboard';
+            }, 2000);
+        } else {
+            const score = (data.score * 100).toFixed(0);
+            const message = `Верификация не пройдена (совпадение: ${score}%). Попробуйте снова.`;
+            window.showMessage(message, 'error');
+        }
+    } catch (error) {
+        window.showMessage('Ошибка: ' + error.message, 'error');
+    }
+
+    verifyBtn.disabled = false;
+    verifyBtn.textContent = '🔐 Верифицировать';
+});
+
+verifyClearBtn.addEventListener('click', () => {
+    verifyInputArea.value = '';
+    verifyKeystrokeEvents = [];
+    verifyStats.style.display = 'none';
+});
+
+verifyInputArea.addEventListener('keydown', (e) => {
+    if (verifyKeystrokeEvents.length === 0) {
+        verifyStartTime = Date.now();
+    }
+
+    verifyKeystrokeEvents.push({
+        keycode: e.keyCode,
+        key_char: e.key,
+        press_time: Date.now() - verifyStartTime,
+        release_time: null
+    });
+});
+
+verifyInputArea.addEventListener('keyup', (e) => {
+    if (verifyKeystrokeEvents.length > 0) {
+        const lastEvent = verifyKeystrokeEvents[verifyKeystrokeEvents.length - 1];
+        if (lastEvent.release_time === null) {
+            lastEvent.release_time = Date.now() - verifyStartTime;
+        }
+
+        updateVerifyStats();
+    }
+});
+
+function updateVerifyStats() {
+    if (verifyKeystrokeEvents.length < 5) return;
+
+    verifyStats.style.display = 'grid';
+
+    const dwellTimes = verifyKeystrokeEvents.map(e => e.release_time - e.press_time).filter(t => t > 0);
+    const avgDwell = dwellTimes.length > 0 ? (dwellTimes.reduce((a, b) => a + b) / dwellTimes.length).toFixed(0) : 0;
+
+    const flightTimes = [];
+    for (let i = 0; i < verifyKeystrokeEvents.length - 1; i++) {
+        const flight = verifyKeystrokeEvents[i + 1].press_time - verifyKeystrokeEvents[i].release_time;
+        if (flight >= 0) flightTimes.push(flight);
+    }
+    const avgFlight = flightTimes.length > 0 ? (flightTimes.reduce((a, b) => a + b) / flightTimes.length).toFixed(0) : 0;
+
+    const totalTime = (verifyKeystrokeEvents[verifyKeystrokeEvents.length - 1].release_time - verifyKeystrokeEvents[0].press_time) / 1000;
+    const speed = totalTime > 0 ? (verifyKeystrokeEvents.length / totalTime).toFixed(1) : 0;
+
+    document.getElementById('verifyDwellTime').textContent = avgDwell;
+    document.getElementById('verifyFlightTime').textContent = avgFlight;
+    document.getElementById('verifyTypingSpeed').textContent = speed;
+    document.getElementById('matchScore').textContent = '⏳ Анализ...';
+}
+</script>
+{% endblock %}
