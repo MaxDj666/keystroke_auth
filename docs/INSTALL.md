@@ -7,7 +7,6 @@ keystroke_auth_app/
 ├── keystroke_app.py              # Основное Flask приложение
 ├── requirements.txt              # Зависимости Python
 ├── README.md                     # Документация
-├── TESTING.md                    # Руководство по тестированию
 └── templates/
     ├── base.html                 # Базовый шаблон
     ├── login.html                # Страница входа
@@ -214,35 +213,6 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 ```
 
-## Производство
-
-Для развертывания в production:
-
-1. **Изменить SECRET_KEY**
-   ```python
-   app.config['SECRET_KEY'] = os.urandom(24).hex()
-   ```
-
-2. **Использовать production базу данных**
-   ```python
-   app.config['SQLALCHEMY_DATABASE_URI'] = 'postgresql://user:pass@localhost/keystroke_db'
-   ```
-
-3. **Использовать production сервер**
-   ```bash
-   pip install gunicorn
-   gunicorn -w 4 -b 0.0.0.0:5000 keystroke_app:app
-   ```
-
-4. **Включить HTTPS**
-   - Использовать Nginx как reverse proxy
-   - Установить SSL сертификат
-
-5. **Оптимизация**
-   - Кэширование профилей в памяти (Redis)
-   - Асинхронная обработка анализа
-   - Увеличение пулов БД
-
 ## Научные аспекты
 
 Приложение собирает данные для:
@@ -265,13 +235,3 @@ FROM keystroke_events ke
 JOIN users u ON ke.user_id = u.id
 ORDER BY u.id, ke.timestamp
 ```
-
-## Контакты и поддержка
-
-- **Проблемы**: Проверьте логи в консоли
-- **Вопросы**: Раздел README
-- **Улучшения**: Возможно добавление аргументов в CLI
-
-## Лицензия
-
-MIT License

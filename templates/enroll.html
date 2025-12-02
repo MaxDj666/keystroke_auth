@@ -85,22 +85,21 @@ const statsDiv = document.getElementById('stats');
 let keystrokeEvents = [];
 let isRecording = false;
 let startTime = 0;
-let currentIndex = 0;
-let samplesCollected = 0;  // ← ДОБАВЛЕНО: локальный счетчик образцов
+let samplesCollected = 0;
 
 // Функция для обновления прогресс-бара (локальная версия)
 function updateProgressBar() {
-    const currentSample = samplesCollected + 1;  // ← Используем локальный счетчик
+    const currentSample = samplesCollected + 1;
     document.getElementById('sampleNum').textContent = currentSample;
     document.getElementById('progressBar').style.width = (currentSample / 5 * 100) + '%';
-    console.log('Progress updated:', currentSample, '/', 5);  // Для отладки
+    console.log('Progress updated:', currentSample, '/', 5);
 }
 
 // Функция для подсчета образцов с сервера
 async function fetchSampleCount() {
     try {
         const stats = await fetch('/api/profile-stats').then(r => r.json());
-        samplesCollected = stats.profiles_count;  // ← СОХРАНЯЕМ В ЛОКАЛЬНУЮ ПЕРЕМЕННУЮ
+        samplesCollected = stats.profiles_count;
         updateProgressBar();
         console.log('Samples from server:', samplesCollected);
     } catch (e) {
@@ -111,6 +110,10 @@ async function fetchSampleCount() {
 // Инициализация при загрузке
 fetchSampleCount();
 
+// ════════════════════════════════════════════════════════════
+// ИСПРАВЛЕНИЕ: Обработка быстрой печати через input event
+// ════════════════════════════════════════════════════════════
+
 startBtn.addEventListener('click', () => {
     inputArea.disabled = false;
     inputArea.focus();
@@ -118,7 +121,6 @@ startBtn.addEventListener('click', () => {
     keystrokeEvents = [];
     isRecording = true;
     startTime = Date.now();
-    currentIndex = 0;
 
     startBtn.style.display = 'none';
     submitBtn.style.display = 'block';
@@ -134,9 +136,7 @@ startBtn.addEventListener('click', () => {
 clearBtn.addEventListener('click', () => {
     inputArea.value = '';
     keystrokeEvents = [];
-    currentIndex = 0;
     statsDiv.style.display = 'none';
-    // Сброс отображения текста
     enrollmentDisplay.innerHTML = enrollmentText;
 });
 
@@ -144,13 +144,13 @@ submitBtn.addEventListener('click', async () => {
     isRecording = false;
     inputArea.disabled = true;
 
-    // Проверка: напечатан ли правильно текст
     const typed = inputArea.value.trim();
     const accuracy = calculateAccuracy(typed, enrollmentText);
 
     console.log('Typed:', typed);
     console.log('Expected:', enrollmentText);
     console.log('Accuracy:', accuracy);
+    console.log('Keystroke events:', keystrokeEvents.length);
 
     if (accuracy < 0.8) {
         window.showMessage(`Текст введен неверно (точность: ${(accuracy * 100).toFixed(0)}%). Попробуйте снова.`, 'error');
@@ -183,17 +183,14 @@ submitBtn.addEventListener('click', async () => {
                     window.location.href = '/dashboard';
                 }, 2000);
             } else {
-                // ← ИСПРАВЛЕНИЕ: обновляем локальный счетчик вместо fetchSampleCount
-                samplesCollected++;  // Увеличиваем счетчик
-                updateProgressBar();  // Обновляем UI
+                samplesCollected++;
+                updateProgressBar();
 
                 window.showMessage(data.message, 'success');
 
-                // Сброс для следующего образца
                 setTimeout(() => {
                     inputArea.value = '';
                     keystrokeEvents = [];
-                    currentIndex = 0;
                     startBtn.style.display = 'block';
                     submitBtn.style.display = 'none';
                     clearBtn.disabled = false;
@@ -201,7 +198,6 @@ submitBtn.addEventListener('click', async () => {
                     submitBtn.disabled = false;
                     submitBtn.textContent = '✓ Завершить';
                     statsDiv.style.display = 'none';
-                    // Сброс отображения текста
                     enrollmentDisplay.innerHTML = enrollmentText;
                 }, 1500);
             }
@@ -224,92 +220,114 @@ submitBtn.addEventListener('click', async () => {
     submitBtn.textContent = '✓ Завершить';
 });
 
-// Отслеживание нажатий клавиш
+// ════════════════════════════════════════════════════════════
+// ОСНОВНОЕ ИСПРАВЛЕНИЕ: Отслеживание через keydown/keyup
+// ════════════════════════════════════════════════════════════
+
+// Отслеживание нажатий клавиш (НАЖАТИЕ)
 inputArea.addEventListener('keydown', (e) => {
     if (!isRecording) return;
 
     const char = e.key;
 
-    // Исправление: проверка, что мы не вышли за границы текста
-    if (currentIndex >= enrollmentText.length) {
-        e.preventDefault();
-        window.showMessage('Текст полностью введен! Нажмите "Завершить".', 'info');
+    // Проверка границ
+    const currentPosition = inputArea.value.length;
+
+    if (currentPosition >= enrollmentText.length) {
+        if (char !== 'Backspace') {
+            e.preventDefault();
+            window.showMessage('Текст полностью введен! Нажмите "Завершить".', 'info');
+        }
         return;
     }
 
-    const expectedChar = enrollmentText[currentIndex];
-
-    // Проверка корректного символа (только буквы и пробелы)
-    if (char.length === 1) {
-        // Проверяем, совпадает ли символ
-        if (char.toLowerCase() === expectedChar.toLowerCase() || (char === ' ' && expectedChar === ' ')) {
-            // Позволяем вводить символ, но отслеживаем его
-            keystrokeEvents.push({
-                keycode: e.keyCode,
-                key_char: char,
-                press_time: Date.now() - startTime,
-                release_time: null
-            });
-        } else {
-            // Неправильный символ - блокируем его ввод
-            e.preventDefault();
-            window.showMessage(`Ожидается "${expectedChar}", введен "${char}"`, 'error');
-            return;
-        }
-    } else if (e.key === 'Backspace') {
-        // Разрешаем Backspace для исправлений
+    // Обработка Backspace
+    if (e.key === 'Backspace') {
         if (keystrokeEvents.length > 0) {
             keystrokeEvents.pop();
-            if (currentIndex > 0) {
-                currentIndex--;
-            }
         }
         return;
-    } else {
-        // Запрещаем другие клавиши (стрелки, Enter и т.д.)
+    }
+
+    // Игнорируем другие спецклавиши
+    if (e.key.length !== 1) {
         if (e.key !== 'Control' && e.key !== 'Shift' && e.key !== 'Alt') {
             e.preventDefault();
         }
         return;
     }
+
+    // ✅ ИСПРАВЛЕНИЕ: Получаем ОЖИДАЕМЫЙ символ на основе текущей длины
+    const currentLength = inputArea.value.length;
+    const expectedChar = enrollmentText[currentLength];
+
+    // ✅ Проверяем совпадение (с учетом регистра и пробелов)
+    const charMatches = (
+        char.toLowerCase() === expectedChar.toLowerCase() ||
+        (char === ' ' && expectedChar === ' ')
+    );
+
+    if (!charMatches) {
+        // ❌ Неправильный символ - блокируем
+        e.preventDefault();
+        window.showMessage(`Ожидается "${expectedChar}", введен "${char}"`, 'error');
+        return;
+    }
+
+    // ✅ Правильный символ - отслеживаем нажатие
+    keystrokeEvents.push({
+        keycode: e.keyCode,
+        key_char: char,
+        press_time: Date.now() - startTime,
+        release_time: null,
+        index: currentLength  // ← Добавляем индекс для отладки
+    });
 });
 
+// Отслеживание отпускания клавиш (ОТПУСКАНИЕ)
 inputArea.addEventListener('keyup', (e) => {
     if (!isRecording) return;
 
-    // Обновляем индекс текущей позиции
-    const typed = inputArea.value;
-    let matchCount = 0;
+    // Небольшая задержка для синхронизации с браузером
+    setTimeout(() => {
+        if (!isRecording) return;
 
-    for (let i = 0; i < typed.length && i < enrollmentText.length; i++) {
-        if (typed[i].toLowerCase() === enrollmentText[i].toLowerCase()) {
-            matchCount++;
+        // Фиксирование времени отпускания
+        if (keystrokeEvents.length > 0) {
+            const lastEvent = keystrokeEvents[keystrokeEvents.length - 1];
+            if (lastEvent.release_time === null || lastEvent.release_time === undefined) {
+                lastEvent.release_time = Date.now() - startTime;
+            }
         }
-    }
 
-    currentIndex = matchCount;
+        updateHighlight();
+        updateStats();
 
-    // Обновление подсветки
-    updateHighlight();
-
-    // Обновление статистики
-    updateStats();
-
-    // Фиксирование времени отпускания для последнего события
-    if (keystrokeEvents.length > 0) {
-        const lastEvent = keystrokeEvents[keystrokeEvents.length - 1];
-        if (lastEvent.release_time === null) {
-            lastEvent.release_time = Date.now() - startTime;
+        const typed = inputArea.value;
+        if (typed.length === enrollmentText.length && calculateAccuracy(typed, enrollmentText) >= 0.95) {
+            setTimeout(() => {
+                window.showMessage('Текст полностью введен! Нажмите "Завершить".', 'success');
+            }, 300);
         }
-    }
-
-    // Проверка: полностью ли напечатан текст
-    if (typed.length === enrollmentText.length && calculateAccuracy(typed, enrollmentText) >= 0.95) {
-        setTimeout(() => {
-            window.showMessage('Текст полностью введен! Нажмите "Завершить".', 'success');
-        }, 300);
-    }
+    }, 0);
 });
+
+// ════════════════════════════════════════════════════════════
+// ДОПОЛНИТЕЛЬНАЯ ОБРАБОТКА: Ловим события копирования/вставки
+// ════════════════════════════════════════════════════════════
+
+inputArea.addEventListener('paste', (e) => {
+    e.preventDefault();
+    window.showMessage('Копирование/вставка запрещены. Печатайте текст вручную.', 'error');
+});
+
+inputArea.addEventListener('cut', (e) => {
+    e.preventDefault();
+});
+
+// ════════════════════════════════════════════════════════════
+// ОБНОВЛЕНИЕ ПОДСВЕТКИ
+// ════════════════════════════════════════════════════════════
 
 function updateHighlight() {
     const typed = inputArea.value;
@@ -317,23 +335,29 @@ function updateHighlight() {
 
     for (let i = 0; i < enrollmentText.length; i++) {
         if (i < typed.length) {
+            // Символ напечатан
             if (typed[i].toLowerCase() === enrollmentText[i].toLowerCase()) {
+                // ✅ Правильный символ
                 highlightedText += enrollmentText[i];
             } else {
-                // Неправильный символ
+                // ❌ Неправильный символ (красный)
                 highlightedText += '<span style="color: red;">' + enrollmentText[i] + '</span>';
             }
         } else if (i === typed.length) {
-            // Текущий символ для печати
+            // Текущий символ для печати (желтый фон)
             highlightedText += '<span style="background: #ffeb3b; font-weight: bold;">' + enrollmentText[i] + '</span>';
         } else {
-            // Оставшиеся символы
+            // Оставшиеся символы (серые)
             highlightedText += enrollmentText[i];
         }
     }
 
     enrollmentDisplay.innerHTML = highlightedText;
 }
+
+// ════════════════════════════════════════════════════════════
+// РАСЧЕТ ТОЧНОСТИ
+// ════════════════════════════════════════════════════════════
 
 function calculateAccuracy(typed, expected) {
     if (expected.length === 0) return 0;
@@ -347,7 +371,7 @@ function calculateAccuracy(typed, expected) {
         }
     }
 
-    // Учитываем также длину: если напечатано больше или меньше символов
+    // Учитываем также длину
     if (typed.length !== expected.length) {
         return matches / expected.length * 0.95;
     }
@@ -355,16 +379,20 @@ function calculateAccuracy(typed, expected) {
     return matches / expected.length;
 }
 
+// ════════════════════════════════════════════════════════════
+// ОБНОВЛЕНИЕ СТАТИСТИКИ
+// ════════════════════════════════════════════════════════════
+
 function updateStats() {
     if (keystrokeEvents.length < 2) return;
 
     statsDiv.style.display = 'block';
 
-    // Dwell times
+    // Dwell times (время нажатия)
     const dwellTimes = keystrokeEvents.map(e => e.release_time - e.press_time).filter(t => t > 0);
     const avgDwell = dwellTimes.length > 0 ? (dwellTimes.reduce((a, b) => a + b) / dwellTimes.length).toFixed(0) : 0;
 
-    // Flight times
+    // Flight times (время между нажатиями)
     const flightTimes = [];
     for (let i = 0; i < keystrokeEvents.length - 1; i++) {
         const flight = keystrokeEvents[i + 1].press_time - keystrokeEvents[i].release_time;
@@ -372,11 +400,11 @@ function updateStats() {
     }
     const avgFlight = flightTimes.length > 0 ? (flightTimes.reduce((a, b) => a + b) / flightTimes.length).toFixed(0) : 0;
 
-    // Typing speed
+    // Typing speed (скорость печати)
     const totalTime = (keystrokeEvents[keystrokeEvents.length - 1].release_time - keystrokeEvents[0].press_time) / 1000;
     const speed = totalTime > 0 ? (keystrokeEvents.length / totalTime).toFixed(1) : 0;
 
-    // Accuracy
+    // Accuracy (точность)
     const typed = inputArea.value;
     const accuracy = calculateAccuracy(typed, enrollmentText);
 

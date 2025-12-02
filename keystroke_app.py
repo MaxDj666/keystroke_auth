@@ -2,18 +2,18 @@
 Keystroke Dynamics Authentication System
 Биометрическая аутентификация на основе анализа клавиатурного почерка
 """
-
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
-from flask_sqlalchemy import SQLAlchemy
-from flask_cors import CORS
-from werkzeug.security import generate_password_hash, check_password_hash
-import numpy as np
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import IsolationForest
+import datetime
 import json
-from datetime import datetime, timedelta
 import os
 from functools import wraps
+
+import numpy as np
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask_cors import CORS
+from flask_sqlalchemy import SQLAlchemy
+from sklearn.ensemble import IsolationForest
+from sklearn.preprocessing import StandardScaler
+from werkzeug.security import generate_password_hash, check_password_hash
 
 # Инициализация Flask приложения
 app = Flask(__name__)
@@ -34,7 +34,7 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
     keystroke_profiles = db.relationship('KeystrokeProfile', backref='user', lazy=True)
     sessions = db.relationship('UserSession', backref='user', lazy=True)
 
@@ -50,7 +50,7 @@ class KeystrokeProfile(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     features = db.Column(db.Text, nullable=False)  # JSON с признаками
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
     sample_count = db.Column(db.Integer, default=1)
 
 
@@ -62,8 +62,8 @@ class KeystrokeEvent(db.Model):
     keycode = db.Column(db.Integer, nullable=False)
     key_char = db.Column(db.String(10), nullable=False)
     press_time = db.Column(db.Float, nullable=False)
-    release_time = db.Column(db.Float, nullable=False)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    release_time = db.Column(db.Float, nullable=True)  # Разрешено NULL
+    timestamp = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
 
 
 class UserSession(db.Model):
@@ -71,8 +71,8 @@ class UserSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     session_token = db.Column(db.String(200), unique=True, nullable=False)
-    login_time = db.Column(db.DateTime, default=datetime.utcnow)
-    last_activity = db.Column(db.DateTime, default=datetime.utcnow)
+    login_time = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
+    last_activity = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
     is_active = db.Column(db.Boolean, default=True)
     authentication_score = db.Column(db.Float, default=1.0)
 
@@ -97,15 +97,7 @@ class KeystrokeDynamicsAnalyzer:
         self.CONTINUOUS_AUTH_THRESHOLD = 0.5
 
     def extract_features(self, keystroke_events: list) -> dict:
-        """
-        Извлечение признаков из событий нажатия клавиш
-
-        Признаки:
-        - Dwell time: время нажатия на клавишу
-        - Flight time: время между отпусканием одной клавиши и нажатием следующей
-        - Typing speed: скорость печати
-        - Key press consistency: консистентность нажатия
-        """
+        """Извлечение признаков из событий нажатия клавиш"""
         if len(keystroke_events) < 2:
             return None
 
@@ -119,19 +111,35 @@ class KeystrokeDynamicsAnalyzer:
 
         # Вычисление dwell time (время держания клавиши)
         for event in keystroke_events:
-            dwell_time = event['release_time'] - event['press_time']
-            features['dwell_times'].append(dwell_time)
+            release_time = event.get('release_time')
+            press_time = event.get('press_time')
+
+            if release_time is not None and press_time is not None:
+                dwell_time = release_time - press_time
+                if dwell_time > 0:
+                    features['dwell_times'].append(dwell_time)
 
         # Вычисление flight time (время между клавишами)
         for i in range(len(keystroke_events) - 1):
-            flight_time = keystroke_events[i + 1]['press_time'] - keystroke_events[i]['release_time']
-            if flight_time >= 0:  # Исключаем перекрытия
-                features['flight_times'].append(flight_time)
+            current_release = keystroke_events[i].get('release_time')
+            next_press = keystroke_events[i + 1].get('press_time')
+
+            if current_release is not None and next_press is not None:
+                flight_time = next_press - current_release
+                if flight_time >= 0:  # Исключаем перекрытия
+                    features['flight_times'].append(flight_time)
 
         # Вычисление скорости печати (символы в секунду)
-        total_time = keystroke_events[-1]['release_time'] - keystroke_events[0]['press_time']
-        if total_time > 0:
-            features['typing_speed'] = len(keystroke_events) / (total_time / 1000)
+        # Находим первое и последнее события с известными временами
+        valid_events = [e for e in keystroke_events
+                        if e.get('press_time') is not None and e.get('release_time') is not None]
+
+        if len(valid_events) >= 2:
+            first_event = valid_events[0]
+            last_event = valid_events[-1]
+            total_time = last_event['release_time'] - first_event['press_time']
+            if total_time > 0:
+                features['typing_speed'] = len(valid_events) / (total_time / 1000)
 
         # Ритм печати
         if features['dwell_times']:
@@ -139,7 +147,8 @@ class KeystrokeDynamicsAnalyzer:
 
         # Консистентность нажатия (вариация dwell times)
         if features['dwell_times']:
-            features['pressure_consistency'] = np.std(features['dwell_times']) if len(features['dwell_times']) > 1 else 0
+            features['pressure_consistency'] = np.std(features['dwell_times']) if len(
+                features['dwell_times']) > 1 else 0
 
         return features
 
@@ -211,7 +220,7 @@ class KeystrokeDynamicsAnalyzer:
             'mean_vector': np.mean(user_array, axis=0).tolist(),
             'std_vector': np.std(user_array, axis=0).tolist(),
             'sample_count': len(user_vectors),
-            'created_at': datetime.utcnow().isoformat()
+            'created_at': datetime.datetime.now(datetime.UTC).isoformat()
         }
 
         return profile
@@ -238,6 +247,31 @@ class KeystrokeDynamicsAnalyzer:
             'score': float(similarity),
             'is_anomaly': bool(is_anomaly)
         }
+
+    def compare_profiles(self, features1: dict, features2: dict) -> float:
+        """
+        Сравнивает два профиля признаков и возвращает оценку схожести (0-1)
+
+        Args:
+            features1: Первый словарь с признаками
+            features2: Второй словарь с признаками
+
+        Returns:
+            float: Оценка схожести от 0 до 1
+        """
+        if not features1 or not features2:
+            return 0.0
+
+        # Преобразуем признаки в векторы
+        vector1 = self.features_to_vector(features1)
+        vector2 = self.features_to_vector(features2)
+
+        # Если не удалось создать векторы
+        if vector1 is None or vector2 is None:
+            return 0.0
+
+        # Используем существующий метод calculate_similarity
+        return self.calculate_similarity(vector1, vector2)
 
 
 # Инициализация анализатора
@@ -269,13 +303,13 @@ def check_session_validity(user_id):
         return False
 
     # Проверка таймаута
-    if datetime.utcnow() - active_session.last_activity > timedelta(seconds=app.config['SESSION_TIMEOUT']):
+    if datetime.datetime.now(datetime.UTC) - active_session.last_activity > datetime.timedelta(seconds=app.config['SESSION_TIMEOUT']):
         active_session.is_active = False
         db.session.commit()
         return False
 
     # Обновление времени активности
-    active_session.last_activity = datetime.utcnow()
+    active_session.last_activity = datetime.datetime.now(datetime.UTC)
     db.session.commit()
 
     return True
@@ -424,76 +458,109 @@ def enroll():
         }), 200
 
 
-@app.route('/verify', methods=['POST'])
-def verify():
-    """Верификация клавиатурного почерка при входе"""
-    data = request.get_json()
-    keystroke_events = data.get('keystroke_events', [])
+@app.route('/verify-keystroke', methods=['GET', 'POST'])
+def verify_keystroke():
+    """Верификация почерка пользователя при входе"""
+    # Разрешаем доступ как с temp_user_id (после логина), так и с user_id
+    if 'temp_user_id' not in session and 'user_id' not in session:
+        return redirect(url_for('login'))
 
-    if 'temp_user_id' not in session:
-        return jsonify({'error': 'Сессия истекла'}), 401
+    if request.method == 'GET':
+        # Загружаем страницу верификации
+        return render_template('verify.html')
 
-    user_id = session['temp_user_id']
+    else:  # POST запрос для верификации
+        try:
+            data = request.json
+            keystroke_events = data.get('keystroke_events', [])
 
-    # Получение профилей пользователя
-    profiles = KeystrokeProfile.query.filter_by(user_id=user_id).all()
+            # Определяем user_id (из временной или постоянной сессии)
+            if 'temp_user_id' in session:
+                user_id = session['temp_user_id']
+                is_temp_session = True
+            else:
+                user_id = session['user_id']
+                is_temp_session = False
 
-    if not profiles:
-        return jsonify({'error': 'Профиль не найден'}), 404
+            if not keystroke_events or len(keystroke_events) < 5:
+                return jsonify({
+                    'verified': False,
+                    'message': 'Недостаточно данных для верификации'
+                }), 400
 
-    # Извлечение признаков из текущего ввода
-    features = analyzer.extract_features(keystroke_events)
-    current_vector = analyzer.features_to_vector(features)
+            # Получаем сохраненные профили пользователя
+            profiles = KeystrokeProfile.query.filter_by(
+                user_id=user_id
+            ).order_by(KeystrokeProfile.created_at.desc()).limit(5).all()
 
-    if current_vector is None:
-        return jsonify({'error': 'Не удалось обработать события клавиш'}), 400
+            if not profiles:
+                return jsonify({
+                    'verified': False,
+                    'message': 'Профиль пользователя не найден. Пройдите энролмент.'
+                }), 401
 
-    # Загрузка профиля
-    profile_data = json.loads(profiles[0].features)
+            # Анализируем текущий ввод
+            current_features = analyzer.extract_features(keystroke_events)
 
-    # Расширение профиля всеми образцами
-    all_vectors = []
-    for profile in profiles:
-        profile_features = json.loads(profile.features)
-        vector = analyzer.features_to_vector(profile_features)
-        if vector is not None:
-            all_vectors.append(vector)
+            if not current_features:
+                return jsonify({
+                    'verified': False,
+                    'message': 'Ошибка при анализе почерка'
+                }), 400
 
-    # Обучение профиля
-    if all_vectors:
-        trained_profile = analyzer.train_profile(all_vectors)
-        result = analyzer.verify_keystroke(current_vector, trained_profile)
-    else:
-        result = {'authenticated': False, 'score': 0.0}
+            # Сравниваем с каждым сохраненным профилем
+            max_similarity = 0
 
-    if result['authenticated']:
-        # Успешная верификация - создание сессии
-        session.clear()
-        user = User.query.get(user_id)
-        session['user_id'] = user_id
-        session['username'] = user.username
+            for profile in profiles:
+                stored_features = json.loads(profile.features)
 
-        # Создание записи сессии
-        user_session = UserSession(
-            user_id=user_id,
-            session_token=os.urandom(32).hex(),
-            authentication_score=result['score']
-        )
-        db.session.add(user_session)
-        db.session.commit()
+                if stored_features:
+                    similarity = analyzer.compare_profiles(stored_features, current_features)
+                    max_similarity = max(max_similarity, similarity)
 
-        return jsonify({
-            'authenticated': True,
-            'score': result['score'],
-            'message': 'Верификация успешна!'
-        }), 200
-    else:
-        return jsonify({
-            'authenticated': False,
-            'score': result['score'],
-            'is_anomaly': result['is_anomaly'],
-            'message': 'Верификация не пройдена. Попробуйте еще раз.'
-        }), 401
+            # Пороговое значение
+            VERIFY_THRESHOLD = 0.60
+            verified = max_similarity >= VERIFY_THRESHOLD
+
+            if verified:
+                # Если это временная сессия (после логина), делаем ее постоянной
+                if is_temp_session:
+                    session['user_id'] = user_id
+                    user = User.query.get(user_id)
+                    session['username'] = user.username
+                    # Удаляем временные данные
+                    session.pop('temp_user_id', None)
+                    session.pop('temp_username', None)
+
+                    # Создание записи сессии
+                    user_session = UserSession(
+                        user_id=user_id,
+                        session_token=os.urandom(32).hex()
+                    )
+                    db.session.add(user_session)
+                    db.session.commit()
+
+                return jsonify({
+                    'verified': True,
+                    'message': f'✅ Верификация успешна! ({max_similarity * 100:.0f}%)',
+                    'similarity': max_similarity,
+                    'redirect': '/dashboard'  # Указываем куда перенаправить
+                })
+            else:
+                return jsonify({
+                    'verified': False,
+                    'message': f'❌ Верификация не пройдена ({max_similarity * 100:.0f}%). Попробуйте снова.',
+                    'similarity': max_similarity
+                }), 401
+
+        except Exception as e:
+            print(f"Error in verify_keystroke: {e}")
+            import traceback
+            traceback.print_exc()
+            return jsonify({
+                'error': str(e),
+                'verified': False
+            }), 500
 
 
 @app.route('/dashboard')

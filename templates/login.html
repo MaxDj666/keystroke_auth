@@ -34,48 +34,60 @@
 </div>
 
 <script>
-document.getElementById('loginForm').addEventListener('submit', async (e) => {
-    e.preventDefault();
+    document.getElementById('login-form').addEventListener('submit', function(e) {
+        e.preventDefault();
 
-    const username = document.getElementById('username').value;
-    const password = document.getElementById('password').value;
-    const btn = document.getElementById('loginBtn');
+        const username = document.getElementById('username').value;
+        const password = document.getElementById('password').value;
 
-    btn.disabled = true;
-    btn.textContent = 'Проверка...';
+        // Скрываем предыдущие сообщения
+        document.getElementById('error-message').style.display = 'none';
+        document.getElementById('success-message').style.display = 'none';
 
-    try {
-        const response = await fetch('/login', {
+        // Показываем загрузку
+        document.getElementById('submit-btn').style.display = 'none';
+        document.getElementById('loader').style.display = 'block';
+
+        // Отправляем запрос на сервер
+        fetch('/login', {
             method: 'POST',
             headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ username, password })
-        });
+            body: JSON.stringify({
+                username: username,
+                password: password
+            })
+        })
+        .then(response => {
+            document.getElementById('loader').style.display = 'none';
+            document.getElementById('submit-btn').style.display = 'block';
 
-        const data = await response.json();
-
-        if (response.ok) {
-            if (data.requires_enrollment) {
-                window.showMessage('Требуется энролмент почерка', 'info');
-                setTimeout(() => {
-                    window.location.href = '/enroll';
-                }, 1500);
-            } else {
-                window.showMessage('Перейдите к верификации почерка', 'success');
-                setTimeout(() => {
-                    window.location.href = '/verify-keystroke';
-                }, 1500);
+            if (!response.ok) {
+                return response.json().then(data => {
+                    throw new Error(data.error || 'Login failed');
+                });
             }
-        } else {
-            window.showMessage(data.error || 'Ошибка входа', 'error');
-        }
-    } catch (error) {
-        window.showMessage('Ошибка: ' + error.message, 'error');
-    }
-
-    btn.disabled = false;
-    btn.textContent = 'Войти';
-});
+            return response.json();
+        })
+        .then(data => {
+            if (data.requires_enrollment === true) {
+                // Если требуется энролмент, перенаправляем на страницу энролмента
+                window.location.href = '/enroll';
+            } else if (data.requires_enrollment === false) {
+                // Если энролмент не требуется, перенаправляем на верификацию
+                window.location.href = '/verify-keystroke';
+            } else {
+                // Если что-то пошло не так
+                document.getElementById('error-message').textContent =
+                    data.message || 'Unexpected response from server';
+                document.getElementById('error-message').style.display = 'block';
+            }
+        })
+        .catch(error => {
+            document.getElementById('error-message').textContent = error.message;
+            document.getElementById('error-message').style.display = 'block';
+        });
+    });
 </script>
 {% endblock %}
