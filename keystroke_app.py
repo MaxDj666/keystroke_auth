@@ -28,6 +28,7 @@ CORS(app)
 # МОДЕЛИ БАЗЫ ДАННЫХ
 # ========================
 
+
 class User(db.Model):
     """Модель пользователя"""
     id = db.Column(db.Integer, primary_key=True)
@@ -729,3 +730,8 @@ if __name__ == '__main__':
     with app.app_context():
         db.create_all()
     app.run(debug=True, port=5000)
+
+# 1 - fix login page
+# 2 - http://127.0.0.1:5000/login?username=test1&password=000000 login and password are visible (not mandatory)
+# tip - remember to clear browser сache (ctrl + shift + del)
+# tip - create new dialogue with perplexity (python v2) keystroke_app.py + config.py + templates
