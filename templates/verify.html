@@ -17,7 +17,9 @@
             </div>
 
             <div style="background: #e3f2fd; padding: 15px; border-radius: 5px; margin: 20px 0; text-align: center;">
-                <p style="font-size: 14px; font-weight: bold; color: #1976d2;">The quick brown fox jumps over the lazy dog</p>
+                <p style="font-size: 14px; font-weight: bold; color: #1976d2;">
+                    {{ verify_text or "The quick brown fox jumps over the lazy dog" }}
+                </p>
             </div>
 
             <div class="form-group">
@@ -75,7 +77,7 @@ verifyBtn.addEventListener('click', async () => {
     verifyBtn.textContent = 'Верификация...';
 
     try {
-        const response = await fetch('/verify', {
+        const response = await fetch('/verify-keystroke', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -85,13 +87,13 @@ verifyBtn.addEventListener('click', async () => {
 
         const data = await response.json();
 
-        if (response.ok && data.authenticated) {
+        if (response.ok && data.verified) {
             window.showMessage('✓ Верификация успешна! Добро пожаловать!', 'success');
             setTimeout(() => {
                 window.location.href = '/dashboard';
             }, 2000);
         } else {
-            const score = (data.score * 100).toFixed(0);
+            const score = (data.similarity * 100).toFixed(0);
             const message = `Верификация не пройдена (совпадение: ${score}%). Попробуйте снова.`;
             window.showMessage(message, 'error');
         }

@@ -15,11 +15,28 @@ from sklearn.ensemble import IsolationForest
 from sklearn.preprocessing import StandardScaler
 from werkzeug.security import generate_password_hash, check_password_hash
 
-# Инициализация Flask приложения
+# Импорт конфигурации
+from config import AuthConfig, get_config, AppConfig
+
+# Инициализация Flask приложения с конфигурацией
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'your-secret-key-change-this'
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///keystroke_auth.db'
-app.config['SESSION_TIMEOUT'] = 3600  # 1 час
+
+# Определение окружения
+env = os.environ.get('FLASK_ENV', 'development')
+config = get_config(env)
+
+# Применение конфигурации
+app.config.from_object(config)
+
+# Если в конфиге нет нужных значений, установим по умолчанию из AuthConfig
+if not hasattr(config, 'SECRET_KEY'):
+    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or 'dev-secret-key'
+
+if not hasattr(config, 'SQLALCHEMY_DATABASE_URI'):
+    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL') or 'sqlite:///keystroke_auth.db'
+
+if not hasattr(config, 'SESSION_TIMEOUT'):
+    app.config['SESSION_TIMEOUT'] = AuthConfig.SESSION_TIMEOUT_SECONDS
 
 db = SQLAlchemy(app)
 CORS(app)
@@ -35,7 +52,7 @@ class User(db.Model):
     username = db.Column(db.String(80), unique=True, nullable=False)
     email = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(200), nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     keystroke_profiles = db.relationship('KeystrokeProfile', backref='user', lazy=True)
     sessions = db.relationship('UserSession', backref='user', lazy=True)
 
@@ -51,7 +68,7 @@ class KeystrokeProfile(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     features = db.Column(db.Text, nullable=False)  # JSON с признаками
-    created_at = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
+    created_at = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     sample_count = db.Column(db.Integer, default=1)
 
 
@@ -64,7 +81,7 @@ class KeystrokeEvent(db.Model):
     key_char = db.Column(db.String(10), nullable=False)
     press_time = db.Column(db.Float, nullable=False)
     release_time = db.Column(db.Float, nullable=True)  # Разрешено NULL
-    timestamp = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
+    timestamp = db.Column(db.DateTime, default=datetime.datetime.utcnow)
 
 
 class UserSession(db.Model):
@@ -72,8 +89,8 @@ class UserSession(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False)
     session_token = db.Column(db.String(200), unique=True, nullable=False)
-    login_time = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
-    last_activity = db.Column(db.DateTime, default=datetime.datetime.now(datetime.UTC))
+    login_time = db.Column(db.DateTime, default=datetime.datetime.utcnow)
+    last_activity = db.Column(db.DateTime, default=datetime.datetime.utcnow)
     is_active = db.Column(db.Boolean, default=True)
     authentication_score = db.Column(db.Float, default=1.0)
 
@@ -88,14 +105,17 @@ class KeystrokeDynamicsAnalyzer:
     def __init__(self):
         self.scaler = StandardScaler()
         self.anomaly_detector = IsolationForest(
-            contamination=0.1,
+            contamination=AuthConfig.ANOMALY_DETECTOR_CONTAMINATION,
             random_state=42,
             n_estimators=100
         )
-        # Пороги для аутентификации
-        self.ENROLLMENT_SAMPLES = 5  # Минимум образцов для энролмента
-        self.THRESHOLD = 0.6  # Порог идентификации (0-1)
-        self.CONTINUOUS_AUTH_THRESHOLD = 0.5
+        # Использование конфигурации из AuthConfig
+        self.ENROLLMENT_SAMPLES = AuthConfig.ENROLLMENT_SAMPLES
+        self.THRESHOLD = AuthConfig.VERIFICATION_THRESHOLD
+        self.CONTINUOUS_AUTH_THRESHOLD = AuthConfig.CONTINUOUS_AUTH_THRESHOLD
+        self.VERIFY_THRESHOLD = AuthConfig.VERIFY_THRESHOLD
+        self.MAX_ANOMALY_WARNINGS = AuthConfig.MAX_ANOMALY_WARNINGS
+        self.ANOMALY_CHECK_INTERVAL = AuthConfig.ANOMALY_CHECK_INTERVAL
 
     def extract_features(self, keystroke_events: list) -> dict:
         """Извлечение признаков из событий нажатия клавиш"""
@@ -221,7 +241,7 @@ class KeystrokeDynamicsAnalyzer:
             'mean_vector': np.mean(user_array, axis=0).tolist(),
             'std_vector': np.std(user_array, axis=0).tolist(),
             'sample_count': len(user_vectors),
-            'created_at': datetime.datetime.now(datetime.UTC).isoformat()
+            'created_at': datetime.datetime.utcnow().isoformat()
         }
 
         return profile
@@ -303,14 +323,17 @@ def check_session_validity(user_id):
     if not active_session:
         return False
 
+    # Используем SESSION_TIMEOUT из конфига
+    session_timeout = app.config.get('SESSION_TIMEOUT', AuthConfig.SESSION_TIMEOUT_SECONDS)
+
     # Проверка таймаута
-    if datetime.datetime.now(datetime.UTC) - active_session.last_activity > datetime.timedelta(seconds=app.config['SESSION_TIMEOUT']):
+    if datetime.datetime.utcnow() - active_session.last_activity > datetime.timedelta(seconds=session_timeout):
         active_session.is_active = False
         db.session.commit()
         return False
 
     # Обновление времени активности
-    active_session.last_activity = datetime.datetime.now(datetime.UTC)
+    active_session.last_activity = datetime.datetime.utcnow()
     db.session.commit()
 
     return True
@@ -375,11 +398,14 @@ def login():
             'requires_enrollment': True,
             'message': 'Требуется регистрация клавиатурного почерка'
         }), 200
-
-    return jsonify({
-        'requires_enrollment': False,
-        'message': 'Перейдите к верификации почерка'
-    }), 200
+    else:
+        # Энролмент не требуется, устанавливаем временную сессию для верификации
+        session['temp_user_id'] = user.id
+        session['temp_username'] = username
+        return jsonify({
+            'requires_enrollment': False,
+            'message': 'Перейдите к верификации почерка'
+        }), 200
 
 
 @app.route('/enroll', methods=['GET', 'POST'])
@@ -388,7 +414,9 @@ def enroll():
     if request.method == 'GET':
         if 'temp_user_id' not in session:
             return redirect(url_for('login'))
-        return render_template('enroll.html')
+        # Передаем текст для энролмента из конфига в шаблон
+        enrollment_text = AuthConfig.ENROLLMENT_TEXT
+        return render_template('enroll.html', enrollment_text=enrollment_text)
 
     data = request.get_json()
     keystroke_events = data.get('keystroke_events', [])
@@ -401,6 +429,11 @@ def enroll():
 
     # Извлечение и анализ признаков
     features = analyzer.extract_features(keystroke_events)
+
+    # Проверка, что features не None
+    if features is None:
+        return jsonify({'error': 'Не удалось обработать события клавиш'}), 400
+
     feature_vector = analyzer.features_to_vector(features)
 
     if feature_vector is None:
@@ -417,13 +450,19 @@ def enroll():
 
     # Сохранение событий для анализа
     for event in keystroke_events:
+        # Добавляем проверку наличия release_time
+        release_time = event.get('release_time')
+        if release_time is None:
+            # Если release_time не указан, используем press_time + 100мс
+            release_time = event.get('press_time', 0) + 100
+
         keystroke_event = KeystrokeEvent(
             user_id=user_id,
             session_id=f"enroll_{existing_profiles + 1}",
             keycode=event.get('keycode', 0),
             key_char=event.get('key_char', ''),
             press_time=event.get('press_time', 0),
-            release_time=event.get('release_time', 0)
+            release_time=release_time
         )
         db.session.add(keystroke_event)
 
@@ -467,8 +506,9 @@ def verify_keystroke():
         return redirect(url_for('login'))
 
     if request.method == 'GET':
-        # Загружаем страницу верификации
-        return render_template('verify.html')
+        # Загружаем страницу верификации с текстом из конфига
+        verify_text = AuthConfig.VERIFICATION_TEXT
+        return render_template('verify.html', verify_text=verify_text)
 
     else:  # POST запрос для верификации
         try:
@@ -520,8 +560,7 @@ def verify_keystroke():
                     max_similarity = max(max_similarity, similarity)
 
             # Пороговое значение
-            VERIFY_THRESHOLD = 0.60
-            verified = max_similarity >= VERIFY_THRESHOLD
+            verified = max_similarity >= analyzer.VERIFY_THRESHOLD
 
             if verified:
                 # Если это временная сессия (после логина), делаем ее постоянной
@@ -729,9 +768,5 @@ def profile_stats():
 if __name__ == '__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True, port=5000)
-
-# 1 - fix login page
-# 2 - http://127.0.0.1:5000/login?username=test1&password=000000 login and password are visible (not mandatory)
-# tip - remember to clear browser сache (ctrl + shift + del)
-# tip - create new dialogue with perplexity (python v2) keystroke_app.py + config.py + templates
+    debug_mode = app.config.get('DEBUG', AppConfig.DEBUG)
+    app.run(debug=debug_mode, port=5000)

@@ -34,7 +34,7 @@
 
             <div style="background: #e8f5e9; padding: 15px; border-radius: 5px; margin: 20px 0; text-align: center;">
                 <p style="font-size: 14px; font-weight: bold; color: #2e7d32;" id="enrollmentText">
-                    The quick brown fox jumps over the lazy dog
+                    {{ enrollment_text or "The quick brown fox jumps over the lazy dog" }}
                 </p>
             </div>
 
@@ -74,7 +74,7 @@
 </div>
 
 <script>
-const enrollmentText = "The quick brown fox jumps over the lazy dog";
+const enrollmentText = document.getElementById('enrollmentText').textContent.trim();
 const inputArea = document.getElementById('inputArea');
 const startBtn = document.getElementById('startBtn');
 const clearBtn = document.getElementById('clearBtn');
@@ -257,7 +257,6 @@ inputArea.addEventListener('keydown', (e) => {
         return;
     }
 
-    // ✅ ИСПРАВЛЕНИЕ: Получаем ОЖИДАЕМЫЙ символ на основе текущей длины
     const currentLength = inputArea.value.length;
     const expectedChar = enrollmentText[currentLength];
 
@@ -280,7 +279,7 @@ inputArea.addEventListener('keydown', (e) => {
         key_char: char,
         press_time: Date.now() - startTime,
         release_time: null,
-        index: currentLength  // ← Добавляем индекс для отладки
+        index: currentLength
     });
 });
 

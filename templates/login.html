@@ -34,22 +34,23 @@
 </div>
 
 <script>
-    document.getElementById('login-form').addEventListener('submit', function(e) {
-        e.preventDefault();
+document.getElementById('loginForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
 
-        const username = document.getElementById('username').value;
-        const password = document.getElementById('password').value;
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    const btn = document.getElementById('loginBtn');
 
-        // Скрываем предыдущие сообщения
-        document.getElementById('error-message').style.display = 'none';
-        document.getElementById('success-message').style.display = 'none';
+    // Скрываем предыдущие сообщения
+    const messageEl = document.getElementById('message');
+    messageEl.className = 'message';
 
-        // Показываем загрузку
-        document.getElementById('submit-btn').style.display = 'none';
-        document.getElementById('loader').style.display = 'block';
+    // Показываем загрузку
+    btn.disabled = true;
+    btn.textContent = 'Вход...';
 
-        // Отправляем запрос на сервер
-        fetch('/login', {
+    try {
+        const response = await fetch('/login', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -58,19 +59,11 @@
                 username: username,
                 password: password
             })
-        })
-        .then(response => {
-            document.getElementById('loader').style.display = 'none';
-            document.getElementById('submit-btn').style.display = 'block';
+        });
 
-            if (!response.ok) {
-                return response.json().then(data => {
-                    throw new Error(data.error || 'Login failed');
-                });
-            }
-            return response.json();
-        })
-        .then(data => {
+        const data = await response.json();
+
+        if (response.ok) {
             if (data.requires_enrollment === true) {
                 // Если требуется энролмент, перенаправляем на страницу энролмента
                 window.location.href = '/enroll';
@@ -79,15 +72,17 @@
                 window.location.href = '/verify-keystroke';
             } else {
                 // Если что-то пошло не так
-                document.getElementById('error-message').textContent =
-                    data.message || 'Unexpected response from server';
-                document.getElementById('error-message').style.display = 'block';
+                window.showMessage(data.message || 'Неожиданный ответ от сервера', 'error');
             }
-        })
-        .catch(error => {
-            document.getElementById('error-message').textContent = error.message;
-            document.getElementById('error-message').style.display = 'block';
-        });
-    });
+        } else {
+            window.showMessage(data.error || 'Ошибка входа', 'error');
+        }
+    } catch (error) {
+        window.showMessage('Ошибка: ' + error.message, 'error');
+    }
+
+    btn.disabled = false;
+    btn.textContent = 'Войти';
+});
 </script>
 {% endblock %}
